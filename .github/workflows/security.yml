@@ -52,7 +52,10 @@ jobs:
       - name: Install Bandit
         run: pip install bandit
       - name: Run Bandit (-lll = report/fail on HIGH severity only)
-        run: bandit -r backend/ -lll
+        # backend/tests is excluded: the VULN-03 regression test deliberately
+        # computes an MD5 hash to prove the new hash ISN'T MD5, which Bandit
+        # (reasonably, out of context) flags as HIGH severity (B324).
+        run: bandit -r backend/ -lll -x backend/tests
 
   gitleaks:
     name: Secrets scan (Gitleaks)
