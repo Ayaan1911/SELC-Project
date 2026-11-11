@@ -2,11 +2,11 @@
 import os
 import time
 
+import jwt
 from argon2 import PasswordHasher
 from argon2.exceptions import VerifyMismatchError
 from dotenv import load_dotenv
 from fastapi import Depends, Header, HTTPException
-from jose import JWTError, jwt
 
 from database import get_db
 
@@ -71,7 +71,7 @@ def get_current_user(authorization: str = Header(default="")):
         raise HTTPException(status_code=401, detail="Missing bearer token")
     try:
         payload = decode_token(authorization[len("Bearer "):])
-    except JWTError:
+    except jwt.PyJWTError:
         raise HTTPException(status_code=401, detail="Invalid token")
 
     conn = get_db()

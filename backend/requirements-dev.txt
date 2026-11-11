@@ -1,5 +1,7 @@
 # Extra dependencies for running the test suite (not needed to run the app itself).
+# PyJWT itself now comes from requirements.txt (the app uses it directly since
+# the VULN-12 fix); tests import it too, to forge/decode tokens for assertions.
 -r requirements.txt
 pytest==8.3.3
 httpx==0.27.2
-PyJWT==2.9.0
+pip-audit==2.10.1

@@ -257,6 +257,12 @@ Seed accounts: `admin`/`admin123` (admin), `alice`/`alice123` (user), `bob`/`bob
   **Result:** `pip-audit` (or any SCA tool / Dependency-Check / Snyk / GitHub Dependabot) flags
   `python-jose 3.3.0` for CVE-2024-33663 / CVE-2024-33664.
 - **v2 fix:** upgrade to `python-jose>=3.4.0` (or migrate to `PyJWT`), and keep dependencies current.
+- **Status (v2): FIXED.** `backend/auth.py` now uses `PyJWT==2.15.1` instead of
+  `python-jose`. `fastapi`, `uvicorn`, `python-dotenv` and `bleach` were also upgraded
+  to versions with no known CVEs at time of fixing (the earlier pins had themselves
+  picked up unplanted CVEs since v1 was built - see `docs/SCAN_SUMMARY_V1.md`).
+  `pip-audit -r backend/requirements.txt` now reports "No known vulnerabilities found".
+  Regression test: `backend/tests/test_vuln12_dependency.py`.
 
 ---
 
