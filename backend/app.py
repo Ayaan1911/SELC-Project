@@ -14,6 +14,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, field_validator
 
+from audit import log_event
 from auth import create_token, get_current_user, hash_password, require_admin, verify_password
 from database import get_db, init_db
 
@@ -165,6 +166,8 @@ def _is_locked_out(conn, username: str) -> bool:
 def login(body: LoginBody):
     conn = get_db()
     if _is_locked_out(conn, body.username):
+        log_event(conn, "login_lockout", body.username, "login attempted while locked out")
+        conn.commit()
         conn.close()
         raise HTTPException(
             status_code=429,
@@ -180,6 +183,8 @@ def login(body: LoginBody):
         "INSERT INTO login_attempts (username, success, created_at) VALUES (?, ?, ?)",
         (body.username, 1 if success else 0, now()),
     )
+    if not success:
+        log_event(conn, "login_failed", body.username, "invalid username or password")
     conn.commit()
     conn.close()
 
@@ -356,8 +361,17 @@ def order_detail(order_id: int, user: dict = Depends(get_current_user)):
     order = conn.execute("SELECT * FROM orders WHERE id = ?", (order_id,)).fetchone()
     # VULN-02 FIXED: enforce ownership - only the order's own user, or an admin,
     # may read it (CWE-639). A mismatch is reported as 404 (not 403) so a user
-    # cannot distinguish "not yours" from "doesn't exist".
-    if order is None or (order["user_id"] != user["id"] and user["role"] != "admin"):
+    # cannot distinguish "not yours" from "doesn't exist" - but it's still
+    # recorded in the audit log as an authorization failure, not a plain 404.
+    if order is not None and order["user_id"] != user["id"] and user["role"] != "admin":
+        log_event(
+            conn, "authz_denied", user["username"],
+            f"tried to read order #{order_id} owned by another user",
+        )
+        conn.commit()
+        conn.close()
+        raise HTTPException(status_code=404, detail="Order not found")
+    if order is None:
         conn.close()
         raise HTTPException(status_code=404, detail="Order not found")
     items = conn.execute(
@@ -380,8 +394,9 @@ def admin_add_product(body: ProductBody, admin: dict = Depends(require_admin)):
         "INSERT INTO products (name, description, price, stock) VALUES (?, ?, ?, ?)",
         (body.name, body.description, body.price, body.stock),
     )
-    conn.commit()
     new_id = cur.lastrowid
+    log_event(conn, "admin_action", admin["username"], f"added product #{new_id} ({body.name!r})")
+    conn.commit()
     conn.close()
     return {"id": new_id}
 
@@ -393,6 +408,7 @@ def admin_edit_product(product_id: int, body: ProductBody, admin: dict = Depends
         "UPDATE products SET name = ?, description = ?, price = ?, stock = ? WHERE id = ?",
         (body.name, body.description, body.price, body.stock, product_id),
     )
+    log_event(conn, "admin_action", admin["username"], f"edited product #{product_id} ({body.name!r})")
     conn.commit()
     conn.close()
     return {"ok": True}
@@ -402,6 +418,7 @@ def admin_edit_product(product_id: int, body: ProductBody, admin: dict = Depends
 def admin_delete_product(product_id: int, admin: dict = Depends(require_admin)):
     conn = get_db()
     conn.execute("DELETE FROM products WHERE id = ?", (product_id,))
+    log_event(conn, "admin_action", admin["username"], f"deleted product #{product_id}")
     conn.commit()
     conn.close()
     return {"ok": True}

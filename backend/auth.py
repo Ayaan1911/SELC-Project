@@ -8,6 +8,7 @@ from argon2.exceptions import VerifyMismatchError
 from dotenv import load_dotenv
 from fastapi import Depends, Header, HTTPException
 
+from audit import log_event
 from database import get_db
 
 _ph = PasswordHasher()
@@ -87,5 +88,9 @@ def get_current_user(authorization: str = Header(default="")):
 # VULN-08 FIXED: role-based access control for admin-only routes (CWE-862).
 def require_admin(user: dict = Depends(get_current_user)):
     if user["role"] != "admin":
+        conn = get_db()
+        log_event(conn, "authz_denied", user["username"], "non-admin called an admin-only endpoint")
+        conn.commit()
+        conn.close()
         raise HTTPException(status_code=403, detail="Admin only")
     return user
