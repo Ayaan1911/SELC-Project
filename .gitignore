@@ -8,3 +8,5 @@ frontend/dist/
 .vite/
 *.log
 .pids/
+.env
+.env.*
