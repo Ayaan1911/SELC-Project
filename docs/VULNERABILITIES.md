@@ -195,6 +195,11 @@ Seed accounts: `admin`/`admin123` (admin), `alice`/`alice123` (user), `bob`/`bob
   The raw SQLite error and the exact server-side query string (useful for crafting further
   injection payloads) are returned to the client.
 - **v2 fix:** log the full exception server-side; return a generic message and a correlation ID to the client.
+- **Status (v2): FIXED.** The global handler (`backend/app.py`) now logs the full
+  exception type/message/traceback via Python's `logging` module and returns only a
+  generic message plus a random `error_id` to the client. The ad hoc error branch
+  inside `search_products` was removed entirely as part of the VULN-01 fix. Regression
+  test: `backend/tests/test_vuln09_verbose_errors.py`.
 
 ## VULN-10 — CORS allows all origins
 

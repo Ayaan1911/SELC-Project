@@ -2,7 +2,9 @@
 
 Run with:  python app.py   (binds to 127.0.0.1:8000 only)
 """
+import logging
 import traceback
+import uuid
 from datetime import datetime
 
 import bleach
@@ -14,6 +16,9 @@ from pydantic import BaseModel, field_validator
 
 from auth import create_token, get_current_user, hash_password, require_admin, verify_password
 from database import get_db, init_db
+
+logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+logger = logging.getLogger("securecart")
 
 app = FastAPI(title="SecureCart API")
 
@@ -30,17 +35,19 @@ app.add_middleware(
 
 
 # ----------------------------------------------------------- error handling
-# VULN-09: verbose errors leak stack traces and internal details (CWE-209)
+# VULN-09 FIXED: the client gets a generic message and a correlation ID; the
+# full exception type, message and stack trace are logged server-side only,
+# never returned in the response (CWE-209).
 @app.exception_handler(Exception)
 async def unhandled_error(request: Request, exc: Exception):
+    error_id = str(uuid.uuid4())
+    logger.error(
+        "Unhandled error [%s] on %s %s: %s\n%s",
+        error_id, request.method, request.url.path, exc, traceback.format_exc(),
+    )
     return JSONResponse(
         status_code=500,
-        content={
-            "error": str(exc),
-            "type": type(exc).__name__,
-            "path": request.url.path,
-            "trace": traceback.format_exc(),
-        },
+        content={"error": "Internal server error. Please try again later.", "error_id": error_id},
     )
 
 
