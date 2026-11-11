@@ -73,3 +73,21 @@ and several orders owned by different users so the IDOR is easy to demonstrate.
 Checkout is a mock. No real payment is processed. Enter any dummy card number
 (for example `4242424242424242`); only the last 4 digits are kept on the order.
 **Never enter a real card number.**
+
+## CI: security pipeline (`.github/workflows/security.yml`)
+
+Runs on every push and pull request (also triggerable manually). Six independent jobs,
+each failing the build on its own criterion:
+
+| Job | Tool | What it checks | Fails the build on |
+|-----|------|-----------------|---------------------|
+| `pytest` | pytest | Backend test suite, including one regression test per fixed vulnerability (`backend/tests/`) | Any failing test |
+| `semgrep` | Semgrep | Static analysis of `backend/` and `frontend/src/` for security anti-patterns (injection, hardcoded secrets, weak crypto, ...) | Any `ERROR`-severity (high-severity) finding |
+| `bandit` | Bandit | Python-specific static analysis of `backend/` (SQL building, weak hashes, hardcoded secrets, ...) | Any `HIGH`-severity finding (`-lll`) |
+| `gitleaks` | Gitleaks | Scans the full git history for committed secrets/credentials | Any detected secret |
+| `pip-audit` | pip-audit | Checks `backend/requirements.txt` against known-CVE databases | Any known vulnerability |
+| `npm-audit` | `npm audit` | Checks `frontend/package-lock.json` against npm's advisory database | Any `high`/`critical` severity finding |
+
+See [`docs/SCAN_SUMMARY_V1.md`](docs/SCAN_SUMMARY_V1.md) and
+[`docs/BEFORE_AFTER.md`](docs/BEFORE_AFTER.md) for the baseline (v1) and post-fix (v2)
+results of these same tools run manually against this repo.
