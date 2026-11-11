@@ -23,15 +23,30 @@ logger = logging.getLogger("securecart")
 app = FastAPI(title="SecureCart API")
 
 # ------------------------------------------------------------------- CORS
-# VULN-10: CORS allows every origin (CWE-942)
-# VULN-11: no security headers are set anywhere (no CSP, X-Frame-Options,
-#          X-Content-Type-Options, HSTS, ...) (CWE-693)
+# VULN-10 FIXED: only the real frontend origin may make cross-origin requests
+# to this API (CWE-942).
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=["http://127.0.0.1:5173", "http://localhost:5173"],
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+# VULN-11 FIXED: standard security headers on every response (CWE-693).
+@app.middleware("http")
+async def security_headers(request: Request, call_next):
+    response = await call_next(request)
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["Referrer-Policy"] = "no-referrer"
+    response.headers["Content-Security-Policy"] = "default-src 'self'"
+    # HSTS only has any effect when a response is actually served over HTTPS
+    # (browsers ignore it over plain HTTP, which is all this app ever uses on
+    # localhost) - set here so it's already correct if this is ever deployed
+    # behind TLS.
+    response.headers["Strict-Transport-Security"] = "max-age=63072000; includeSubDomains"
+    return response
 
 
 # ----------------------------------------------------------- error handling

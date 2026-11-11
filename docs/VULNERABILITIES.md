@@ -216,6 +216,9 @@ Seed accounts: `admin`/`admin123` (admin), `alice`/`alice123` (user), `bob`/`bob
   SecureCart API directly from a victim's browser (e.g. to read their cart or orders if they
   are logged in and the token were accessible to script).
 - **v2 fix:** restrict `allow_origins` to the known frontend origin(s) only.
+- **Status (v2): FIXED.** `allow_origins` (`backend/app.py`) is now
+  `["http://127.0.0.1:5173", "http://localhost:5173"]` instead of `"*"`. Regression
+  test: `backend/tests/test_vuln10_11_cors_and_headers.py`.
 
 ## VULN-11 — No security headers
 
@@ -231,6 +234,11 @@ Seed accounts: `admin`/`admin123` (admin), `alice`/`alice123` (user), `bob`/`bob
   **Result:** no output — none of these headers are present, confirmed missing.
 - **v2 fix:** add `starlette`/FastAPI middleware (or a reverse proxy) to set CSP,
   `X-Frame-Options: DENY`, `X-Content-Type-Options: nosniff`, and HSTS.
+- **Status (v2): FIXED.** A `security_headers` HTTP middleware (`backend/app.py`) sets
+  `Content-Security-Policy`, `X-Frame-Options: DENY`, `X-Content-Type-Options: nosniff`,
+  `Referrer-Policy: no-referrer`, and `Strict-Transport-Security` (effective once this
+  is ever served over HTTPS) on every response. Regression test:
+  `backend/tests/test_vuln10_11_cors_and_headers.py`.
 
 ## VULN-12 — Dependency with a known CVE
 
