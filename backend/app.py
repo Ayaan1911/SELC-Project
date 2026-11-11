@@ -2,45 +2,68 @@
 
 Run with:  python app.py   (binds to 127.0.0.1:8000 only)
 """
-import sqlite3
+import logging
 import traceback
+import uuid
 from datetime import datetime
 
+import bleach
 import uvicorn
 from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 
-from auth import create_token, get_current_user, hash_password, verify_password
+from audit import log_event
+from auth import create_token, get_current_user, hash_password, require_admin, verify_password
 from database import get_db, init_db
+
+logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+logger = logging.getLogger("securecart")
 
 app = FastAPI(title="SecureCart API")
 
 # ------------------------------------------------------------------- CORS
-# VULN-10: CORS allows every origin (CWE-942)
-# VULN-11: no security headers are set anywhere (no CSP, X-Frame-Options,
-#          X-Content-Type-Options, HSTS, ...) (CWE-693)
+# VULN-10 FIXED: only the real frontend origin may make cross-origin requests
+# to this API (CWE-942).
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=["http://127.0.0.1:5173", "http://localhost:5173"],
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
 
+# VULN-11 FIXED: standard security headers on every response (CWE-693).
+@app.middleware("http")
+async def security_headers(request: Request, call_next):
+    response = await call_next(request)
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["Referrer-Policy"] = "no-referrer"
+    response.headers["Content-Security-Policy"] = "default-src 'self'"
+    # HSTS only has any effect when a response is actually served over HTTPS
+    # (browsers ignore it over plain HTTP, which is all this app ever uses on
+    # localhost) - set here so it's already correct if this is ever deployed
+    # behind TLS.
+    response.headers["Strict-Transport-Security"] = "max-age=63072000; includeSubDomains"
+    return response
+
+
 # ----------------------------------------------------------- error handling
-# VULN-09: verbose errors leak stack traces and internal details (CWE-209)
+# VULN-09 FIXED: the client gets a generic message and a correlation ID; the
+# full exception type, message and stack trace are logged server-side only,
+# never returned in the response (CWE-209).
 @app.exception_handler(Exception)
 async def unhandled_error(request: Request, exc: Exception):
+    error_id = str(uuid.uuid4())
+    logger.error(
+        "Unhandled error [%s] on %s %s: %s\n%s",
+        error_id, request.method, request.url.path, exc, traceback.format_exc(),
+    )
     return JSONResponse(
         status_code=500,
-        content={
-            "error": str(exc),
-            "type": type(exc).__name__,
-            "path": request.url.path,
-            "trace": traceback.format_exc(),
-        },
+        content={"error": "Internal server error. Please try again later.", "error_id": error_id},
     )
 
 
@@ -59,6 +82,25 @@ class LoginBody(BaseModel):
 class ReviewBody(BaseModel):
     rating: int
     review_text: str
+
+    # VULN-07 FIXED (backend half): validate/sanitize on the way in (CWE-79).
+    @field_validator("rating")
+    @classmethod
+    def rating_in_range(cls, v):
+        if not 1 <= v <= 5:
+            raise ValueError("rating must be between 1 and 5")
+        return v
+
+    @field_validator("review_text")
+    @classmethod
+    def review_text_is_plain_text(cls, v):
+        # Strip all HTML tags/attributes; keep only the plain text content.
+        cleaned = bleach.clean(v, tags=[], attributes={}, strip=True).strip()
+        if not cleaned:
+            raise ValueError("review_text must not be empty")
+        if len(cleaned) > 2000:
+            raise ValueError("review_text is too long (max 2000 characters)")
+        return cleaned
 
 
 class CartBody(BaseModel):
@@ -101,16 +143,52 @@ def register(body: RegisterBody):
     return {"id": user_id, "username": body.username, "role": "user"}
 
 
-# VULN-04: no rate limiting, throttling or account lockout on login (CWE-307)
+# VULN-04 FIXED: rate limiting + temporary lockout (CWE-307). After
+# MAX_LOGIN_ATTEMPTS consecutive failures for a username, further attempts
+# are rejected for LOGIN_LOCKOUT_SECONDS, even with the correct password.
+MAX_LOGIN_ATTEMPTS = 5
+LOGIN_LOCKOUT_SECONDS = 300
+
+
+def _is_locked_out(conn, username: str) -> bool:
+    rows = conn.execute(
+        "SELECT success, created_at FROM login_attempts "
+        "WHERE username = ? ORDER BY id DESC LIMIT ?",
+        (username, MAX_LOGIN_ATTEMPTS),
+    ).fetchall()
+    if len(rows) < MAX_LOGIN_ATTEMPTS or any(r["success"] for r in rows):
+        return False
+    last_attempt = datetime.strptime(rows[0]["created_at"], "%Y-%m-%d %H:%M:%S")
+    return (datetime.now() - last_attempt).total_seconds() < LOGIN_LOCKOUT_SECONDS
+
+
 @app.post("/api/login")
 def login(body: LoginBody):
     conn = get_db()
+    if _is_locked_out(conn, body.username):
+        log_event(conn, "login_lockout", body.username, "login attempted while locked out")
+        conn.commit()
+        conn.close()
+        raise HTTPException(
+            status_code=429,
+            detail="Too many failed login attempts. Try again in a few minutes.",
+        )
+
     row = conn.execute(
         "SELECT id, username, password, role FROM users WHERE username = ?",
         (body.username,),
     ).fetchone()
+    success = row is not None and verify_password(body.password, row["password"])
+    conn.execute(
+        "INSERT INTO login_attempts (username, success, created_at) VALUES (?, ?, ?)",
+        (body.username, 1 if success else 0, now()),
+    )
+    if not success:
+        log_event(conn, "login_failed", body.username, "invalid username or password")
+    conn.commit()
     conn.close()
-    if row is None or not verify_password(body.password, row["password"]):
+
+    if not success:
         raise HTTPException(status_code=401, detail="Invalid username or password")
     token = create_token(row["id"], row["username"], row["role"])
     return {"token": token, "username": row["username"], "role": row["role"]}
@@ -127,15 +205,13 @@ def list_products():
 
 @app.get("/api/products/search")
 def search_products(q: str = ""):
+    # VULN-01 FIXED: parameterized query - user input is bound as data, never
+    # concatenated into SQL text, so it can't change the query's structure (CWE-89).
     conn = get_db()
-    # VULN-01: SQL injection - user input concatenated into the query (CWE-89)
-    query = "SELECT id, name, description, price, stock FROM products WHERE name LIKE '%" + q + "%'"
-    try:
-        rows = conn.execute(query).fetchall()
-    except sqlite3.Error as e:
-        # VULN-09 (part): the raw SQL error and the query are returned to the client
-        conn.close()
-        return JSONResponse(status_code=500, content={"error": str(e), "query": query})
+    rows = conn.execute(
+        "SELECT id, name, description, price, stock FROM products WHERE name LIKE ?",
+        (f"%{q}%",),
+    ).fetchall()
     conn.close()
     return [dict(r) for r in rows]
 
@@ -164,7 +240,7 @@ def add_review(product_id: int, body: ReviewBody, user: dict = Depends(get_curre
     if conn.execute("SELECT id FROM products WHERE id = ?", (product_id,)).fetchone() is None:
         conn.close()
         raise HTTPException(status_code=404, detail="Product not found")
-    # VULN-07: review text stored exactly as submitted, no sanitization (CWE-79)
+    # body.review_text was already sanitized to plain text by the validator above.
     text = body.review_text
     conn.execute(
         "INSERT INTO reviews (product_id, user_id, username, rating, review_text, created_at) "
@@ -282,9 +358,19 @@ def order_history(user: dict = Depends(get_current_user)):
 @app.get("/api/orders/{order_id}")
 def order_detail(order_id: int, user: dict = Depends(get_current_user)):
     conn = get_db()
-    # VULN-02: IDOR - any logged-in user can read any order; the order's owner
-    # (order["user_id"]) is never compared with the caller (CWE-639)
     order = conn.execute("SELECT * FROM orders WHERE id = ?", (order_id,)).fetchone()
+    # VULN-02 FIXED: enforce ownership - only the order's own user, or an admin,
+    # may read it (CWE-639). A mismatch is reported as 404 (not 403) so a user
+    # cannot distinguish "not yours" from "doesn't exist" - but it's still
+    # recorded in the audit log as an authorization failure, not a plain 404.
+    if order is not None and order["user_id"] != user["id"] and user["role"] != "admin":
+        log_event(
+            conn, "authz_denied", user["username"],
+            f"tried to read order #{order_id} owned by another user",
+        )
+        conn.commit()
+        conn.close()
+        raise HTTPException(status_code=404, detail="Order not found")
     if order is None:
         conn.close()
         raise HTTPException(status_code=404, detail="Order not found")
@@ -299,37 +385,40 @@ def order_detail(order_id: int, user: dict = Depends(get_current_user)):
 
 
 # ------------------------------------------------------------------- admin
-# VULN-08: these endpoints only require a valid login (get_current_user), not
-# the admin role, so any registered user can add/edit/delete products (CWE-862)
+# VULN-08 FIXED: every admin route depends on require_admin, not just
+# get_current_user, so only users with role=='admin' can call them (CWE-862).
 @app.post("/api/admin/products")
-def admin_add_product(body: ProductBody, user: dict = Depends(get_current_user)):
+def admin_add_product(body: ProductBody, admin: dict = Depends(require_admin)):
     conn = get_db()
     cur = conn.execute(
         "INSERT INTO products (name, description, price, stock) VALUES (?, ?, ?, ?)",
         (body.name, body.description, body.price, body.stock),
     )
-    conn.commit()
     new_id = cur.lastrowid
+    log_event(conn, "admin_action", admin["username"], f"added product #{new_id} ({body.name!r})")
+    conn.commit()
     conn.close()
     return {"id": new_id}
 
 
 @app.put("/api/admin/products/{product_id}")
-def admin_edit_product(product_id: int, body: ProductBody, user: dict = Depends(get_current_user)):
+def admin_edit_product(product_id: int, body: ProductBody, admin: dict = Depends(require_admin)):
     conn = get_db()
     conn.execute(
         "UPDATE products SET name = ?, description = ?, price = ?, stock = ? WHERE id = ?",
         (body.name, body.description, body.price, body.stock, product_id),
     )
+    log_event(conn, "admin_action", admin["username"], f"edited product #{product_id} ({body.name!r})")
     conn.commit()
     conn.close()
     return {"ok": True}
 
 
 @app.delete("/api/admin/products/{product_id}")
-def admin_delete_product(product_id: int, user: dict = Depends(get_current_user)):
+def admin_delete_product(product_id: int, admin: dict = Depends(require_admin)):
     conn = get_db()
     conn.execute("DELETE FROM products WHERE id = ?", (product_id,))
+    log_event(conn, "admin_action", admin["username"], f"deleted product #{product_id}")
     conn.commit()
     conn.close()
     return {"ok": True}

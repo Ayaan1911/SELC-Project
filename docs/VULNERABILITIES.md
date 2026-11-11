@@ -23,6 +23,9 @@ Seed accounts: `admin`/`admin123` (admin), `alice`/`alice123` (user), `bob`/`bob
   **Result:** returns all rows from `users` (username, MD5 password hash, role) reusing
   the products' JSON shape — confirmed dumping `admin`, `alice`, `bob` and their password hashes.
 - **v2 fix:** use a parameterized query (`?` placeholder) instead of string concatenation.
+- **Status (v2): FIXED.** `search_products` now binds `q` as a query parameter
+  (`backend/app.py`, `search_products`); the UNION payload is treated as a literal
+  string, not SQL. Regression test: `backend/tests/test_vuln01_sqli.py`.
 
 ## VULN-02 — IDOR on order detail
 
@@ -39,6 +42,9 @@ Seed accounts: `admin`/`admin123` (admin), `alice`/`alice123` (user), `bob`/`bob
   **Result:** logged in as `alice`, but order #3 (`bob`'s order, `user_id: 3`) is returned in full,
   including items and the masked card digits.
 - **v2 fix:** require `order["user_id"] == current_user.id` (or admin role) before returning the order.
+- **Status (v2): FIXED.** `order_detail` (`backend/app.py`) now returns 404 unless the
+  caller owns the order or has the `admin` role. Regression test:
+  `backend/tests/test_vuln02_idor.py`.
 
 ## VULN-03 — Passwords stored as unsalted MD5
 
@@ -54,6 +60,10 @@ Seed accounts: `admin`/`admin123` (admin), `alice`/`alice123` (user), `bob`/`bob
   **Result:** matches the hash dumped for `admin` exactly — any MD5 lookup table/rainbow
   table cracks it instantly because there's no per-user salt.
 - **v2 fix:** hash with a strong salted algorithm (bcrypt/argon2/scrypt or PBKDF2 with a per-user salt).
+- **Status (v2): FIXED.** `hash_password`/`verify_password` (`backend/auth.py`) now use
+  Argon2id via `argon2-cffi`, which embeds a random per-hash salt. `seed.py` needed no
+  change - it already calls `auth.hash_password`, so seeded users automatically get the
+  new hashing. Regression test: `backend/tests/test_vuln03_password_hashing.py`.
 
 ## VULN-04 — No rate limiting or lockout on login
 
@@ -70,6 +80,10 @@ Seed accounts: `admin`/`admin123` (admin), `alice`/`alice123` (user), `bob`/`bob
   **Result:** `401 401 401 401 401 401 401 401` — eight rapid guesses, no throttling, no block;
   the endpoint is open to unlimited brute-force / credential-stuffing attempts.
 - **v2 fix:** add per-account/IP rate limiting and temporary lockout after repeated failures.
+- **Status (v2): FIXED.** `login` (`backend/app.py`) now records every attempt in a new
+  `login_attempts` table and rejects further attempts with HTTP 429 for 5 minutes after
+  5 consecutive failures for a username, even with the correct password. Regression
+  test: `backend/tests/test_vuln04_rate_limiting.py`.
 
 ## VULN-05 — Hardcoded JWT secret in source code
 
@@ -87,6 +101,10 @@ Seed accounts: `admin`/`admin123` (admin), `alice`/`alice123` (user), `bob`/`bob
   **Result:** the server accepts the self-signed token and returns order #3 as "admin" —
   full account takeover with no credentials, because the signing secret is public in the repo.
 - **v2 fix:** load the secret from an environment variable / secrets manager, never commit it; rotate it.
+- **Status (v2): FIXED.** `backend/auth.py` now reads `SECURECART_JWT_SECRET` from the
+  environment (via `backend/.env`, see `backend/.env.example`) and raises `RuntimeError`
+  at import time if it is unset - the app refuses to start without it. Regression test:
+  `backend/tests/test_vuln05_06_jwt_secret_and_expiry.py`.
 
 ## VULN-06 — JWTs that never expire
 
@@ -103,6 +121,10 @@ Seed accounts: `admin`/`admin123` (admin), `alice`/`alice123` (user), `bob`/`bob
   **Result:** decoded payload has no expiry claim, so a stolen token from months ago is still
   valid indefinitely; there is no way to force session expiry.
 - **v2 fix:** add a short `exp` claim (e.g. 15–60 minutes) and a refresh-token flow.
+- **Status (v2): FIXED (expiry only; refresh-token flow is noted as future work).**
+  `create_token` (`backend/auth.py`) now sets `exp` to 30 minutes from issuance;
+  `decode_token` rejects expired tokens (python-jose validates `exp` by default).
+  Regression test: `backend/tests/test_vuln05_06_jwt_secret_and_expiry.py`.
 
 ## VULN-07 — Stored XSS in product reviews
 
@@ -125,6 +147,11 @@ Seed accounts: `admin`/`admin123` (admin), `alice`/`alice123` (user), `bob`/`bob
   browsing products) executes the attacker's script.
 - **v2 fix:** sanitize/escape on the backend before storing (or on render), and render review
   text as plain text (`{text}`) instead of `dangerouslySetInnerHTML`.
+- **Status (v2): FIXED.** Backend: a pydantic validator on `ReviewBody.review_text`
+  (`backend/app.py`) strips all HTML tags with `bleach.clean(..., tags=[], strip=True)`
+  and rejects empty/oversized/out-of-range input (422). Frontend:
+  `ProductDetail.jsx` now renders `<div>{r.review_text}</div>` instead of
+  `dangerouslySetInnerHTML`. Regression test: `backend/tests/test_vuln07_stored_xss.py`.
 
 ## VULN-08 — Missing authorization on admin endpoints
 
@@ -145,6 +172,9 @@ Seed accounts: `admin`/`admin123` (admin), `alice`/`alice123` (user), `bob`/`bob
   **Result:** a regular user created and deleted products — full catalog tampering with no admin role.
 - **v2 fix:** add a `require_admin` dependency that checks `user["role"] == "admin"` and apply
   it to every `/api/admin/*` route.
+- **Status (v2): FIXED.** `require_admin` (`backend/auth.py`) checks `user["role"] ==
+  "admin"` and now gates all three admin routes in `backend/app.py`, returning 403 for
+  non-admins. Regression test: `backend/tests/test_vuln08_admin_authz.py`.
 
 ## VULN-09 — Verbose errors leak stack traces and SQL errors
 
@@ -165,6 +195,11 @@ Seed accounts: `admin`/`admin123` (admin), `alice`/`alice123` (user), `bob`/`bob
   The raw SQLite error and the exact server-side query string (useful for crafting further
   injection payloads) are returned to the client.
 - **v2 fix:** log the full exception server-side; return a generic message and a correlation ID to the client.
+- **Status (v2): FIXED.** The global handler (`backend/app.py`) now logs the full
+  exception type/message/traceback via Python's `logging` module and returns only a
+  generic message plus a random `error_id` to the client. The ad hoc error branch
+  inside `search_products` was removed entirely as part of the VULN-01 fix. Regression
+  test: `backend/tests/test_vuln09_verbose_errors.py`.
 
 ## VULN-10 — CORS allows all origins
 
@@ -181,6 +216,9 @@ Seed accounts: `admin`/`admin123` (admin), `alice`/`alice123` (user), `bob`/`bob
   SecureCart API directly from a victim's browser (e.g. to read their cart or orders if they
   are logged in and the token were accessible to script).
 - **v2 fix:** restrict `allow_origins` to the known frontend origin(s) only.
+- **Status (v2): FIXED.** `allow_origins` (`backend/app.py`) is now
+  `["http://127.0.0.1:5173", "http://localhost:5173"]` instead of `"*"`. Regression
+  test: `backend/tests/test_vuln10_11_cors_and_headers.py`.
 
 ## VULN-11 — No security headers
 
@@ -196,6 +234,11 @@ Seed accounts: `admin`/`admin123` (admin), `alice`/`alice123` (user), `bob`/`bob
   **Result:** no output — none of these headers are present, confirmed missing.
 - **v2 fix:** add `starlette`/FastAPI middleware (or a reverse proxy) to set CSP,
   `X-Frame-Options: DENY`, `X-Content-Type-Options: nosniff`, and HSTS.
+- **Status (v2): FIXED.** A `security_headers` HTTP middleware (`backend/app.py`) sets
+  `Content-Security-Policy`, `X-Frame-Options: DENY`, `X-Content-Type-Options: nosniff`,
+  `Referrer-Policy: no-referrer`, and `Strict-Transport-Security` (effective once this
+  is ever served over HTTPS) on every response. Regression test:
+  `backend/tests/test_vuln10_11_cors_and_headers.py`.
 
 ## VULN-12 — Dependency with a known CVE
 
@@ -214,6 +257,12 @@ Seed accounts: `admin`/`admin123` (admin), `alice`/`alice123` (user), `bob`/`bob
   **Result:** `pip-audit` (or any SCA tool / Dependency-Check / Snyk / GitHub Dependabot) flags
   `python-jose 3.3.0` for CVE-2024-33663 / CVE-2024-33664.
 - **v2 fix:** upgrade to `python-jose>=3.4.0` (or migrate to `PyJWT`), and keep dependencies current.
+- **Status (v2): FIXED.** `backend/auth.py` now uses `PyJWT==2.15.1` instead of
+  `python-jose`. `fastapi`, `uvicorn`, `python-dotenv` and `bleach` were also upgraded
+  to versions with no known CVEs at time of fixing (the earlier pins had themselves
+  picked up unplanted CVEs since v1 was built - see `docs/SCAN_SUMMARY_V1.md`).
+  `pip-audit -r backend/requirements.txt` now reports "No known vulnerabilities found".
+  Regression test: `backend/tests/test_vuln12_dependency.py`.
 
 ---
 

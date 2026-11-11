@@ -1,9 +1,13 @@
-# SecureCart v1 (intentionally vulnerable) - backend dependencies
+# SecureCart v2 (hardened) - backend dependencies.
 #
-# VULN-12: python-jose==3.3.0 is pinned on purpose. python-jose <= 3.3.0 is
-# affected by CVE-2024-33663 (algorithm confusion with OpenSSH ECDSA keys) and
-# CVE-2024-33664 (JWE decompression "bomb" denial of service). Both are fixed in
-# 3.4.0. It is the JWT library used in backend/auth.py. Do not upgrade in v1.
-fastapi==0.104.1
-uvicorn==0.24.0
-python-jose[cryptography]==3.3.0
+# VULN-12 FIXED: python-jose==3.3.0 (CVE-2024-33663, CVE-2024-33664) was
+# replaced with PyJWT, and fastapi/uvicorn/python-dotenv/bleach were upgraded
+# past their own since-published CVEs (found by pip-audit against v1, see
+# docs/SCAN_SUMMARY_V1.md). `pip-audit -r backend/requirements.txt` reports no
+# known vulnerabilities for this file as of this commit.
+fastapi==0.162.4
+uvicorn==0.38.0
+PyJWT==2.15.1
+argon2-cffi==23.1.0
+python-dotenv==1.2.4
+bleach==6.4.0

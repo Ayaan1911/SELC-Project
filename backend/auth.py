@@ -1,33 +1,62 @@
 """Password hashing, JWT creation/verification and auth dependencies."""
-import hashlib
+import os
+import time
 
-from fastapi import Header, HTTPException
-from jose import JWTError, jwt
+import jwt
+from argon2 import PasswordHasher
+from argon2.exceptions import VerifyMismatchError
+from dotenv import load_dotenv
+from fastapi import Depends, Header, HTTPException
 
+from audit import log_event
 from database import get_db
 
-# VULN-05: hardcoded JWT signing secret committed in source code (CWE-798)
-SECRET_KEY = "securecart-secret-key-123"
+_ph = PasswordHasher()
+
+# VULN-05 FIXED: the JWT signing secret is loaded from the environment, never
+# committed to source (CWE-798). load_dotenv() reads backend/.env if present
+# (see backend/.env.example); it is a no-op if the file doesn't exist. The app
+# refuses to start if the secret is missing either way, so a deployment can
+# never silently fall back to a default/guessable value.
+load_dotenv()
+try:
+    SECRET_KEY = os.environ["SECURECART_JWT_SECRET"]
+except KeyError as exc:
+    raise RuntimeError(
+        "SECURECART_JWT_SECRET is not set. Copy backend/.env.example to "
+        "backend/.env and set a long random value "
+        '(e.g. `python3 -c "import secrets; print(secrets.token_hex(32))"`), '
+        "or export SECURECART_JWT_SECRET directly."
+    ) from exc
+
 ALGORITHM = "HS256"
+# VULN-06 FIXED: short-lived tokens (CWE-613). A stolen/leaked token is only
+# useful for this long.
+TOKEN_LIFETIME_SECONDS = 30 * 60
 
 
 # ---------------------------------------------------------------- passwords
-# VULN-03: passwords stored as unsalted MD5 (CWE-328 / CWE-759)
+# VULN-03 FIXED: Argon2id, salted automatically per-hash by argon2-cffi
+# (CWE-328 / CWE-759). `_ph.hash()` embeds a random salt and the algorithm
+# parameters in its output, so no salt column is needed.
 def hash_password(password: str) -> str:
-    return hashlib.md5(password.encode()).hexdigest()
+    return _ph.hash(password)
 
 
 def verify_password(password: str, stored: str) -> bool:
-    return hashlib.md5(password.encode()).hexdigest() == stored
+    try:
+        return _ph.verify(stored, password)
+    except VerifyMismatchError:
+        return False
 
 
 # --------------------------------------------------------------------- JWT
 def create_token(user_id: int, username: str, role: str) -> str:
-    # VULN-06: no "exp" claim, so tokens never expire (CWE-613)
     payload = {
         "sub": str(user_id),
         "username": username,
         "role": role,
+        "exp": int(time.time()) + TOKEN_LIFETIME_SECONDS,
     }
     return jwt.encode(payload, SECRET_KEY, algorithm=ALGORITHM)
 
@@ -43,7 +72,7 @@ def get_current_user(authorization: str = Header(default="")):
         raise HTTPException(status_code=401, detail="Missing bearer token")
     try:
         payload = decode_token(authorization[len("Bearer "):])
-    except JWTError:
+    except jwt.PyJWTError:
         raise HTTPException(status_code=401, detail="Invalid token")
 
     conn = get_db()
@@ -54,3 +83,14 @@ def get_current_user(authorization: str = Header(default="")):
     if row is None:
         raise HTTPException(status_code=401, detail="User no longer exists")
     return dict(row)
+
+
+# VULN-08 FIXED: role-based access control for admin-only routes (CWE-862).
+def require_admin(user: dict = Depends(get_current_user)):
+    if user["role"] != "admin":
+        conn = get_db()
+        log_event(conn, "authz_denied", user["username"], "non-admin called an admin-only endpoint")
+        conn.commit()
+        conn.close()
+        raise HTTPException(status_code=403, detail="Admin only")
+    return user

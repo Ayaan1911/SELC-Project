@@ -47,6 +47,23 @@ CREATE TABLE IF NOT EXISTS orders (
     created_at TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS login_attempts (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    username   TEXT NOT NULL,
+    success    INTEGER NOT NULL,   -- 1 = succeeded, 0 = failed
+    created_at TEXT NOT NULL
+);
+
+-- Security audit log: failed logins, lockouts, admin actions and
+-- authorization failures (see docs/INCIDENT_RESPONSE.md).
+CREATE TABLE IF NOT EXISTS audit_log (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    event_type TEXT NOT NULL,   -- login_failed | login_lockout | admin_action | authz_denied
+    username   TEXT,            -- actor, when known
+    detail     TEXT NOT NULL,
+    created_at TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS order_items (
     id           INTEGER PRIMARY KEY AUTOINCREMENT,
     order_id     INTEGER NOT NULL,
