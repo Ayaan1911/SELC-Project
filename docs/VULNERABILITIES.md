@@ -101,6 +101,10 @@ Seed accounts: `admin`/`admin123` (admin), `alice`/`alice123` (user), `bob`/`bob
   **Result:** the server accepts the self-signed token and returns order #3 as "admin" —
   full account takeover with no credentials, because the signing secret is public in the repo.
 - **v2 fix:** load the secret from an environment variable / secrets manager, never commit it; rotate it.
+- **Status (v2): FIXED.** `backend/auth.py` now reads `SECURECART_JWT_SECRET` from the
+  environment (via `backend/.env`, see `backend/.env.example`) and raises `RuntimeError`
+  at import time if it is unset - the app refuses to start without it. Regression test:
+  `backend/tests/test_vuln05_06_jwt_secret_and_expiry.py`.
 
 ## VULN-06 — JWTs that never expire
 
@@ -117,6 +121,10 @@ Seed accounts: `admin`/`admin123` (admin), `alice`/`alice123` (user), `bob`/`bob
   **Result:** decoded payload has no expiry claim, so a stolen token from months ago is still
   valid indefinitely; there is no way to force session expiry.
 - **v2 fix:** add a short `exp` claim (e.g. 15–60 minutes) and a refresh-token flow.
+- **Status (v2): FIXED (expiry only; refresh-token flow is noted as future work).**
+  `create_token` (`backend/auth.py`) now sets `exp` to 30 minutes from issuance;
+  `decode_token` rejects expired tokens (python-jose validates `exp` by default).
+  Regression test: `backend/tests/test_vuln05_06_jwt_secret_and_expiry.py`.
 
 ## VULN-07 — Stored XSS in product reviews
 
