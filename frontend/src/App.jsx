@@ -24,7 +24,7 @@ export default function App() {
   return (
     <>
       <div className="banner">
-        SecureCart v1 is INTENTIONALLY VULNERABLE. Run on localhost only.
+        SecureCart v2 (hardened) — coursework demo, run on localhost only.
       </div>
       <nav>
         <Link to="/">SecureCart</Link>
