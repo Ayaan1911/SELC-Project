@@ -42,6 +42,9 @@ Seed accounts: `admin`/`admin123` (admin), `alice`/`alice123` (user), `bob`/`bob
   **Result:** logged in as `alice`, but order #3 (`bob`'s order, `user_id: 3`) is returned in full,
   including items and the masked card digits.
 - **v2 fix:** require `order["user_id"] == current_user.id` (or admin role) before returning the order.
+- **Status (v2): FIXED.** `order_detail` (`backend/app.py`) now returns 404 unless the
+  caller owns the order or has the `admin` role. Regression test:
+  `backend/tests/test_vuln02_idor.py`.
 
 ## VULN-03 — Passwords stored as unsalted MD5
 

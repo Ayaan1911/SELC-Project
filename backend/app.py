@@ -279,10 +279,11 @@ def order_history(user: dict = Depends(get_current_user)):
 @app.get("/api/orders/{order_id}")
 def order_detail(order_id: int, user: dict = Depends(get_current_user)):
     conn = get_db()
-    # VULN-02: IDOR - any logged-in user can read any order; the order's owner
-    # (order["user_id"]) is never compared with the caller (CWE-639)
     order = conn.execute("SELECT * FROM orders WHERE id = ?", (order_id,)).fetchone()
-    if order is None:
+    # VULN-02 FIXED: enforce ownership - only the order's own user, or an admin,
+    # may read it (CWE-639). A mismatch is reported as 404 (not 403) so a user
+    # cannot distinguish "not yours" from "doesn't exist".
+    if order is None or (order["user_id"] != user["id"] and user["role"] != "admin"):
         conn.close()
         raise HTTPException(status_code=404, detail="Order not found")
     items = conn.execute(
