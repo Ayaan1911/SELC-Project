@@ -10,3 +10,4 @@ frontend/dist/
 .pids/
 .env
 .env.*
+!.env.example
