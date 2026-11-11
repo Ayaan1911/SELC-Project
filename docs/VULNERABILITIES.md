@@ -147,6 +147,11 @@ Seed accounts: `admin`/`admin123` (admin), `alice`/`alice123` (user), `bob`/`bob
   browsing products) executes the attacker's script.
 - **v2 fix:** sanitize/escape on the backend before storing (or on render), and render review
   text as plain text (`{text}`) instead of `dangerouslySetInnerHTML`.
+- **Status (v2): FIXED.** Backend: a pydantic validator on `ReviewBody.review_text`
+  (`backend/app.py`) strips all HTML tags with `bleach.clean(..., tags=[], strip=True)`
+  and rejects empty/oversized/out-of-range input (422). Frontend:
+  `ProductDetail.jsx` now renders `<div>{r.review_text}</div>` instead of
+  `dangerouslySetInnerHTML`. Regression test: `backend/tests/test_vuln07_stored_xss.py`.
 
 ## VULN-08 — Missing authorization on admin endpoints
 

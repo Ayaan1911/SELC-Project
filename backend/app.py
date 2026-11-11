@@ -5,11 +5,12 @@ Run with:  python app.py   (binds to 127.0.0.1:8000 only)
 import traceback
 from datetime import datetime
 
+import bleach
 import uvicorn
 from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 
 from auth import create_token, get_current_user, hash_password, verify_password
 from database import get_db, init_db
@@ -58,6 +59,25 @@ class LoginBody(BaseModel):
 class ReviewBody(BaseModel):
     rating: int
     review_text: str
+
+    # VULN-07 FIXED (backend half): validate/sanitize on the way in (CWE-79).
+    @field_validator("rating")
+    @classmethod
+    def rating_in_range(cls, v):
+        if not 1 <= v <= 5:
+            raise ValueError("rating must be between 1 and 5")
+        return v
+
+    @field_validator("review_text")
+    @classmethod
+    def review_text_is_plain_text(cls, v):
+        # Strip all HTML tags/attributes; keep only the plain text content.
+        cleaned = bleach.clean(v, tags=[], attributes={}, strip=True).strip()
+        if not cleaned:
+            raise ValueError("review_text must not be empty")
+        if len(cleaned) > 2000:
+            raise ValueError("review_text is too long (max 2000 characters)")
+        return cleaned
 
 
 class CartBody(BaseModel):
@@ -193,7 +213,7 @@ def add_review(product_id: int, body: ReviewBody, user: dict = Depends(get_curre
     if conn.execute("SELECT id FROM products WHERE id = ?", (product_id,)).fetchone() is None:
         conn.close()
         raise HTTPException(status_code=404, detail="Product not found")
-    # VULN-07: review text stored exactly as submitted, no sanitization (CWE-79)
+    # body.review_text was already sanitized to plain text by the validator above.
     text = body.review_text
     conn.execute(
         "INSERT INTO reviews (product_id, user_id, username, rating, review_text, created_at) "
