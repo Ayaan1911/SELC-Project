@@ -47,6 +47,13 @@ CREATE TABLE IF NOT EXISTS orders (
     created_at TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS login_attempts (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    username   TEXT NOT NULL,
+    success    INTEGER NOT NULL,   -- 1 = succeeded, 0 = failed
+    created_at TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS order_items (
     id           INTEGER PRIMARY KEY AUTOINCREMENT,
     order_id     INTEGER NOT NULL,

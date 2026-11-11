@@ -100,16 +100,48 @@ def register(body: RegisterBody):
     return {"id": user_id, "username": body.username, "role": "user"}
 
 
-# VULN-04: no rate limiting, throttling or account lockout on login (CWE-307)
+# VULN-04 FIXED: rate limiting + temporary lockout (CWE-307). After
+# MAX_LOGIN_ATTEMPTS consecutive failures for a username, further attempts
+# are rejected for LOGIN_LOCKOUT_SECONDS, even with the correct password.
+MAX_LOGIN_ATTEMPTS = 5
+LOGIN_LOCKOUT_SECONDS = 300
+
+
+def _is_locked_out(conn, username: str) -> bool:
+    rows = conn.execute(
+        "SELECT success, created_at FROM login_attempts "
+        "WHERE username = ? ORDER BY id DESC LIMIT ?",
+        (username, MAX_LOGIN_ATTEMPTS),
+    ).fetchall()
+    if len(rows) < MAX_LOGIN_ATTEMPTS or any(r["success"] for r in rows):
+        return False
+    last_attempt = datetime.strptime(rows[0]["created_at"], "%Y-%m-%d %H:%M:%S")
+    return (datetime.now() - last_attempt).total_seconds() < LOGIN_LOCKOUT_SECONDS
+
+
 @app.post("/api/login")
 def login(body: LoginBody):
     conn = get_db()
+    if _is_locked_out(conn, body.username):
+        conn.close()
+        raise HTTPException(
+            status_code=429,
+            detail="Too many failed login attempts. Try again in a few minutes.",
+        )
+
     row = conn.execute(
         "SELECT id, username, password, role FROM users WHERE username = ?",
         (body.username,),
     ).fetchone()
+    success = row is not None and verify_password(body.password, row["password"])
+    conn.execute(
+        "INSERT INTO login_attempts (username, success, created_at) VALUES (?, ?, ?)",
+        (body.username, 1 if success else 0, now()),
+    )
+    conn.commit()
     conn.close()
-    if row is None or not verify_password(body.password, row["password"]):
+
+    if not success:
         raise HTTPException(status_code=401, detail="Invalid username or password")
     token = create_token(row["id"], row["username"], row["role"])
     return {"token": token, "username": row["username"], "role": row["role"]}

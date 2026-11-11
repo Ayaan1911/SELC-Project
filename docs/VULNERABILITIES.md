@@ -80,6 +80,10 @@ Seed accounts: `admin`/`admin123` (admin), `alice`/`alice123` (user), `bob`/`bob
   **Result:** `401 401 401 401 401 401 401 401` — eight rapid guesses, no throttling, no block;
   the endpoint is open to unlimited brute-force / credential-stuffing attempts.
 - **v2 fix:** add per-account/IP rate limiting and temporary lockout after repeated failures.
+- **Status (v2): FIXED.** `login` (`backend/app.py`) now records every attempt in a new
+  `login_attempts` table and rejects further attempts with HTTP 429 for 5 minutes after
+  5 consecutive failures for a username, even with the correct password. Regression
+  test: `backend/tests/test_vuln04_rate_limiting.py`.
 
 ## VULN-05 — Hardcoded JWT secret in source code
 
