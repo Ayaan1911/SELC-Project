@@ -1,10 +1,9 @@
 # SecureCart v1 (intentionally vulnerable) - backend dependencies
 #
-# NOTE: python-jose==3.3.0 is pinned on purpose. Versions < 3.4.0 are
-# affected by CVE-2024-33663 (algorithm confusion in python-jose allows
-# forging JWTs when a public key is mistakenly accepted as an HMAC secret).
-# This is the "known-CVE dependency" planted for the dependency-scanner
-# part of this coursework. Do not upgrade it in v1.
+# VULN-12: python-jose==3.3.0 is pinned on purpose. python-jose <= 3.3.0 is
+# affected by CVE-2024-33663 (algorithm confusion with OpenSSH ECDSA keys) and
+# CVE-2024-33664 (JWE decompression "bomb" denial of service). Both are fixed in
+# 3.4.0. It is the JWT library used in backend/auth.py. Do not upgrade in v1.
 fastapi==0.104.1
 uvicorn==0.24.0
 python-jose[cryptography]==3.3.0

@@ -1,38 +1,33 @@
 """Password hashing, JWT creation/verification and auth dependencies."""
 import hashlib
-import os
-import time
 
-from fastapi import Depends, Header, HTTPException
+from fastapi import Header, HTTPException
 from jose import JWTError, jwt
 
 from database import get_db
 
-SECRET_KEY = os.environ.get("SECURECART_JWT_SECRET", "dev-only-change-me")
+# VULN-05: hardcoded JWT signing secret committed in source code (CWE-798)
+SECRET_KEY = "securecart-secret-key-123"
 ALGORITHM = "HS256"
-TOKEN_LIFETIME_SECONDS = 3600
 
 
 # ---------------------------------------------------------------- passwords
+# VULN-03: passwords stored as unsalted MD5 (CWE-328 / CWE-759)
 def hash_password(password: str) -> str:
-    salt = os.urandom(16).hex()
-    digest = hashlib.pbkdf2_hmac("sha256", password.encode(), salt.encode(), 100_000).hex()
-    return f"{salt}${digest}"
+    return hashlib.md5(password.encode()).hexdigest()
 
 
 def verify_password(password: str, stored: str) -> bool:
-    salt, digest = stored.split("$", 1)
-    attempt = hashlib.pbkdf2_hmac("sha256", password.encode(), salt.encode(), 100_000).hex()
-    return attempt == digest
+    return hashlib.md5(password.encode()).hexdigest() == stored
 
 
 # --------------------------------------------------------------------- JWT
 def create_token(user_id: int, username: str, role: str) -> str:
+    # VULN-06: no "exp" claim, so tokens never expire (CWE-613)
     payload = {
         "sub": str(user_id),
         "username": username,
         "role": role,
-        "exp": int(time.time()) + TOKEN_LIFETIME_SECONDS,
     }
     return jwt.encode(payload, SECRET_KEY, algorithm=ALGORITHM)
 
@@ -59,9 +54,3 @@ def get_current_user(authorization: str = Header(default="")):
     if row is None:
         raise HTTPException(status_code=401, detail="User no longer exists")
     return dict(row)
-
-
-def require_admin(user: dict = Depends(get_current_user)):
-    if user["role"] != "admin":
-        raise HTTPException(status_code=403, detail="Admin only")
-    return user

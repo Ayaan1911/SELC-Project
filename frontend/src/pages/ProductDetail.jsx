@@ -71,7 +71,8 @@ export default function ProductDetail() {
           <div className="review" key={r.id}>
             <strong>{r.username}</strong> &middot; {"★".repeat(r.rating)}{" "}
             <small>{r.created_at}</small>
-            <div>{r.review_text}</div>
+            {/* VULN-07: review text injected as raw HTML (CWE-79) */}
+            <div dangerouslySetInnerHTML={{ __html: r.review_text }} />
           </div>
         ))}
 

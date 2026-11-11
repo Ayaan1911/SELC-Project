@@ -2,7 +2,8 @@
 
 Run with:  python app.py   (binds to 127.0.0.1:8000 only)
 """
-import html
+import sqlite3
+import traceback
 from datetime import datetime
 
 import uvicorn
@@ -11,30 +12,36 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
-from auth import (
-    create_token,
-    get_current_user,
-    hash_password,
-    require_admin,
-    verify_password,
-)
+from auth import create_token, get_current_user, hash_password, verify_password
 from database import get_db, init_db
 
 app = FastAPI(title="SecureCart API")
 
 # ------------------------------------------------------------------- CORS
+# VULN-10: CORS allows every origin (CWE-942)
+# VULN-11: no security headers are set anywhere (no CSP, X-Frame-Options,
+#          X-Content-Type-Options, HSTS, ...) (CWE-693)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://127.0.0.1:5173", "http://localhost:5173"],
+    allow_origins=["*"],
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
 
 # ----------------------------------------------------------- error handling
+# VULN-09: verbose errors leak stack traces and internal details (CWE-209)
 @app.exception_handler(Exception)
 async def unhandled_error(request: Request, exc: Exception):
-    return JSONResponse(status_code=500, content={"error": "Internal server error"})
+    return JSONResponse(
+        status_code=500,
+        content={
+            "error": str(exc),
+            "type": type(exc).__name__,
+            "path": request.url.path,
+            "trace": traceback.format_exc(),
+        },
+    )
 
 
 # ------------------------------------------------------------------ models
@@ -94,6 +101,7 @@ def register(body: RegisterBody):
     return {"id": user_id, "username": body.username, "role": "user"}
 
 
+# VULN-04: no rate limiting, throttling or account lockout on login (CWE-307)
 @app.post("/api/login")
 def login(body: LoginBody):
     conn = get_db()
@@ -120,10 +128,14 @@ def list_products():
 @app.get("/api/products/search")
 def search_products(q: str = ""):
     conn = get_db()
-    rows = conn.execute(
-        "SELECT id, name, description, price, stock FROM products WHERE name LIKE ?",
-        (f"%{q}%",),
-    ).fetchall()
+    # VULN-01: SQL injection - user input concatenated into the query (CWE-89)
+    query = "SELECT id, name, description, price, stock FROM products WHERE name LIKE '%" + q + "%'"
+    try:
+        rows = conn.execute(query).fetchall()
+    except sqlite3.Error as e:
+        # VULN-09 (part): the raw SQL error and the query are returned to the client
+        conn.close()
+        return JSONResponse(status_code=500, content={"error": str(e), "query": query})
     conn.close()
     return [dict(r) for r in rows]
 
@@ -152,7 +164,8 @@ def add_review(product_id: int, body: ReviewBody, user: dict = Depends(get_curre
     if conn.execute("SELECT id FROM products WHERE id = ?", (product_id,)).fetchone() is None:
         conn.close()
         raise HTTPException(status_code=404, detail="Product not found")
-    text = html.escape(body.review_text)
+    # VULN-07: review text stored exactly as submitted, no sanitization (CWE-79)
+    text = body.review_text
     conn.execute(
         "INSERT INTO reviews (product_id, user_id, username, rating, review_text, created_at) "
         "VALUES (?, ?, ?, ?, ?, ?)",
@@ -269,8 +282,10 @@ def order_history(user: dict = Depends(get_current_user)):
 @app.get("/api/orders/{order_id}")
 def order_detail(order_id: int, user: dict = Depends(get_current_user)):
     conn = get_db()
+    # VULN-02: IDOR - any logged-in user can read any order; the order's owner
+    # (order["user_id"]) is never compared with the caller (CWE-639)
     order = conn.execute("SELECT * FROM orders WHERE id = ?", (order_id,)).fetchone()
-    if order is None or (order["user_id"] != user["id"] and user["role"] != "admin"):
+    if order is None:
         conn.close()
         raise HTTPException(status_code=404, detail="Order not found")
     items = conn.execute(
@@ -284,8 +299,10 @@ def order_detail(order_id: int, user: dict = Depends(get_current_user)):
 
 
 # ------------------------------------------------------------------- admin
+# VULN-08: these endpoints only require a valid login (get_current_user), not
+# the admin role, so any registered user can add/edit/delete products (CWE-862)
 @app.post("/api/admin/products")
-def admin_add_product(body: ProductBody, admin: dict = Depends(require_admin)):
+def admin_add_product(body: ProductBody, user: dict = Depends(get_current_user)):
     conn = get_db()
     cur = conn.execute(
         "INSERT INTO products (name, description, price, stock) VALUES (?, ?, ?, ?)",
@@ -298,7 +315,7 @@ def admin_add_product(body: ProductBody, admin: dict = Depends(require_admin)):
 
 
 @app.put("/api/admin/products/{product_id}")
-def admin_edit_product(product_id: int, body: ProductBody, admin: dict = Depends(require_admin)):
+def admin_edit_product(product_id: int, body: ProductBody, user: dict = Depends(get_current_user)):
     conn = get_db()
     conn.execute(
         "UPDATE products SET name = ?, description = ?, price = ?, stock = ? WHERE id = ?",
@@ -310,7 +327,7 @@ def admin_edit_product(product_id: int, body: ProductBody, admin: dict = Depends
 
 
 @app.delete("/api/admin/products/{product_id}")
-def admin_delete_product(product_id: int, admin: dict = Depends(require_admin)):
+def admin_delete_product(product_id: int, user: dict = Depends(get_current_user)):
     conn = get_db()
     conn.execute("DELETE FROM products WHERE id = ?", (product_id,))
     conn.commit()
