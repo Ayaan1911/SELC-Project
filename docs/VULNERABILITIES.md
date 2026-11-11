@@ -23,6 +23,9 @@ Seed accounts: `admin`/`admin123` (admin), `alice`/`alice123` (user), `bob`/`bob
   **Result:** returns all rows from `users` (username, MD5 password hash, role) reusing
   the products' JSON shape — confirmed dumping `admin`, `alice`, `bob` and their password hashes.
 - **v2 fix:** use a parameterized query (`?` placeholder) instead of string concatenation.
+- **Status (v2): FIXED.** `search_products` now binds `q` as a query parameter
+  (`backend/app.py`, `search_products`); the UNION payload is treated as a literal
+  string, not SQL. Regression test: `backend/tests/test_vuln01_sqli.py`.
 
 ## VULN-02 — IDOR on order detail
 

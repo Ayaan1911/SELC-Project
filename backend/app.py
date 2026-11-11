@@ -2,7 +2,6 @@
 
 Run with:  python app.py   (binds to 127.0.0.1:8000 only)
 """
-import sqlite3
 import traceback
 from datetime import datetime
 
@@ -127,15 +126,13 @@ def list_products():
 
 @app.get("/api/products/search")
 def search_products(q: str = ""):
+    # VULN-01 FIXED: parameterized query - user input is bound as data, never
+    # concatenated into SQL text, so it can't change the query's structure (CWE-89).
     conn = get_db()
-    # VULN-01: SQL injection - user input concatenated into the query (CWE-89)
-    query = "SELECT id, name, description, price, stock FROM products WHERE name LIKE '%" + q + "%'"
-    try:
-        rows = conn.execute(query).fetchall()
-    except sqlite3.Error as e:
-        # VULN-09 (part): the raw SQL error and the query are returned to the client
-        conn.close()
-        return JSONResponse(status_code=500, content={"error": str(e), "query": query})
+    rows = conn.execute(
+        "SELECT id, name, description, price, stock FROM products WHERE name LIKE ?",
+        (f"%{q}%",),
+    ).fetchall()
     conn.close()
     return [dict(r) for r in rows]
 
