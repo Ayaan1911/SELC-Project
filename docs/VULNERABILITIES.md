@@ -172,6 +172,9 @@ Seed accounts: `admin`/`admin123` (admin), `alice`/`alice123` (user), `bob`/`bob
   **Result:** a regular user created and deleted products — full catalog tampering with no admin role.
 - **v2 fix:** add a `require_admin` dependency that checks `user["role"] == "admin"` and apply
   it to every `/api/admin/*` route.
+- **Status (v2): FIXED.** `require_admin` (`backend/auth.py`) checks `user["role"] ==
+  "admin"` and now gates all three admin routes in `backend/app.py`, returning 403 for
+  non-admins. Regression test: `backend/tests/test_vuln08_admin_authz.py`.
 
 ## VULN-09 — Verbose errors leak stack traces and SQL errors
 

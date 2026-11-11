@@ -5,7 +5,7 @@ import time
 from argon2 import PasswordHasher
 from argon2.exceptions import VerifyMismatchError
 from dotenv import load_dotenv
-from fastapi import Header, HTTPException
+from fastapi import Depends, Header, HTTPException
 from jose import JWTError, jwt
 
 from database import get_db
@@ -82,3 +82,10 @@ def get_current_user(authorization: str = Header(default="")):
     if row is None:
         raise HTTPException(status_code=401, detail="User no longer exists")
     return dict(row)
+
+
+# VULN-08 FIXED: role-based access control for admin-only routes (CWE-862).
+def require_admin(user: dict = Depends(get_current_user)):
+    if user["role"] != "admin":
+        raise HTTPException(status_code=403, detail="Admin only")
+    return user

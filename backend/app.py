@@ -12,7 +12,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, field_validator
 
-from auth import create_token, get_current_user, hash_password, verify_password
+from auth import create_token, get_current_user, hash_password, require_admin, verify_password
 from database import get_db, init_db
 
 app = FastAPI(title="SecureCart API")
@@ -349,10 +349,10 @@ def order_detail(order_id: int, user: dict = Depends(get_current_user)):
 
 
 # ------------------------------------------------------------------- admin
-# VULN-08: these endpoints only require a valid login (get_current_user), not
-# the admin role, so any registered user can add/edit/delete products (CWE-862)
+# VULN-08 FIXED: every admin route depends on require_admin, not just
+# get_current_user, so only users with role=='admin' can call them (CWE-862).
 @app.post("/api/admin/products")
-def admin_add_product(body: ProductBody, user: dict = Depends(get_current_user)):
+def admin_add_product(body: ProductBody, admin: dict = Depends(require_admin)):
     conn = get_db()
     cur = conn.execute(
         "INSERT INTO products (name, description, price, stock) VALUES (?, ?, ?, ?)",
@@ -365,7 +365,7 @@ def admin_add_product(body: ProductBody, user: dict = Depends(get_current_user))
 
 
 @app.put("/api/admin/products/{product_id}")
-def admin_edit_product(product_id: int, body: ProductBody, user: dict = Depends(get_current_user)):
+def admin_edit_product(product_id: int, body: ProductBody, admin: dict = Depends(require_admin)):
     conn = get_db()
     conn.execute(
         "UPDATE products SET name = ?, description = ?, price = ?, stock = ? WHERE id = ?",
@@ -377,7 +377,7 @@ def admin_edit_product(product_id: int, body: ProductBody, user: dict = Depends(
 
 
 @app.delete("/api/admin/products/{product_id}")
-def admin_delete_product(product_id: int, user: dict = Depends(get_current_user)):
+def admin_delete_product(product_id: int, admin: dict = Depends(require_admin)):
     conn = get_db()
     conn.execute("DELETE FROM products WHERE id = ?", (product_id,))
     conn.commit()
