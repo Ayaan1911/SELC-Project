@@ -1,10 +1,12 @@
 """Password hashing, JWT creation/verification and auth dependencies."""
-import hashlib
-
+from argon2 import PasswordHasher
+from argon2.exceptions import VerifyMismatchError
 from fastapi import Header, HTTPException
 from jose import JWTError, jwt
 
 from database import get_db
+
+_ph = PasswordHasher()
 
 # VULN-05: hardcoded JWT signing secret committed in source code (CWE-798)
 SECRET_KEY = "securecart-secret-key-123"
@@ -12,13 +14,18 @@ ALGORITHM = "HS256"
 
 
 # ---------------------------------------------------------------- passwords
-# VULN-03: passwords stored as unsalted MD5 (CWE-328 / CWE-759)
+# VULN-03 FIXED: Argon2id, salted automatically per-hash by argon2-cffi
+# (CWE-328 / CWE-759). `_ph.hash()` embeds a random salt and the algorithm
+# parameters in its output, so no salt column is needed.
 def hash_password(password: str) -> str:
-    return hashlib.md5(password.encode()).hexdigest()
+    return _ph.hash(password)
 
 
 def verify_password(password: str, stored: str) -> bool:
-    return hashlib.md5(password.encode()).hexdigest() == stored
+    try:
+        return _ph.verify(stored, password)
+    except VerifyMismatchError:
+        return False
 
 
 # --------------------------------------------------------------------- JWT

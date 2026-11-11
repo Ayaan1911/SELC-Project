@@ -60,6 +60,10 @@ Seed accounts: `admin`/`admin123` (admin), `alice`/`alice123` (user), `bob`/`bob
   **Result:** matches the hash dumped for `admin` exactly — any MD5 lookup table/rainbow
   table cracks it instantly because there's no per-user salt.
 - **v2 fix:** hash with a strong salted algorithm (bcrypt/argon2/scrypt or PBKDF2 with a per-user salt).
+- **Status (v2): FIXED.** `hash_password`/`verify_password` (`backend/auth.py`) now use
+  Argon2id via `argon2-cffi`, which embeds a random per-hash salt. `seed.py` needed no
+  change - it already calls `auth.hash_password`, so seeded users automatically get the
+  new hashing. Regression test: `backend/tests/test_vuln03_password_hashing.py`.
 
 ## VULN-04 — No rate limiting or lockout on login
 
